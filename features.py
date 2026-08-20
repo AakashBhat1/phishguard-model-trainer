@@ -1,12 +1,12 @@
 """
-Enhanced 28+ Cybersecurity Feature Extractor for Malicious URL Detection
-PhishGuard 2.0 - M.Tech Research Pipeline
+Enhanced 30-Dimension Cybersecurity Feature Extractor for Malicious URL Detection
+PhishGuard 2.0 - Standalone Cloud / Google Colab T4 GPU Acceleration Suite
 """
 
 import re
 import math
 from urllib.parse import urlparse
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any, Tuple, Optional
 import numpy as np
 
 # High-risk disposable/phishing TLD dictionary with risk weights
@@ -44,6 +44,7 @@ TOP_BRANDS = [
     'github', 'gitlab', 'wikipedia', 'stackoverflow', 'reddit',
     'spotify', 'youtube', 'zoom', 'salesforce', 'cloudflare'
 ]
+TOP_BRANDS_SET = set(TOP_BRANDS)
 
 # Sensitive phishing intent keywords
 PHISHING_KEYWORDS = [
@@ -55,6 +56,11 @@ PHISHING_KEYWORDS = [
 ]
 
 SPECIAL_CHARS = ['-', '_', '.', '@', '?', '=', '&', '%', '+', '!', '~', '$', '#', ';', ':']
+
+# Pre-compiled regular expressions for ultra-fast matching
+RE_IP = re.compile(r'^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$')
+RE_HOST_TOKENS = re.compile(r'[-._0-9]+')
+RE_WORDS = re.compile(r'[a-zA-Z]+')
 
 
 def calculate_shannon_entropy(text: str) -> float:
@@ -70,13 +76,15 @@ def calculate_shannon_entropy(text: str) -> float:
 
 
 def levenshtein_distance(s1: str, s2: str) -> int:
-    """Compute standard Levenshtein edit distance between two strings."""
+    """Compute standard Levenshtein edit distance between two strings with early exit."""
+    if s1 == s2:
+        return 0
     if len(s1) < len(s2):
         return levenshtein_distance(s2, s1)
     if len(s2) == 0:
         return len(s1)
 
-    previous_row = range(len(s2) + 1)
+    previous_row = list(range(len(s2) + 1))
     for i, c1 in enumerate(s1):
         current_row = [i + 1]
         for j, c2 in enumerate(s2):
@@ -91,10 +99,10 @@ def levenshtein_distance(s1: str, s2: str) -> int:
 
 def extract_features(raw_url: str) -> Tuple[Dict[str, float], Dict[str, Any]]:
     """
-    Extract 28+ numerical, lexical, and structural features from a URL string.
+    Extract 30 numerical, lexical, and structural features from a URL string.
     Returns a dictionary of feature names and float values, plus auxiliary metadata.
     """
-    url = raw_url.strip()
+    url = str(raw_url).strip()
     if not url.startswith(('http://', 'https://')):
         parsed_url_str = 'http://' + url
     else:
@@ -106,7 +114,7 @@ def extract_features(raw_url: str) -> Tuple[Dict[str, float], Dict[str, Any]]:
         path = parsed.path or ''
         query = parsed.query or ''
     except Exception:
-        hostname = url.split('/')[0]
+        hostname = url.split('/')[0] if '/' in url else url
         path = ''
         query = ''
 
@@ -148,8 +156,7 @@ def extract_features(raw_url: str) -> Tuple[Dict[str, float], Dict[str, Any]]:
     vowel_consonant_ratio = round(vowels / (consonants + 1), 4)
 
     # 20. IP Address Host Detection
-    ip_pattern = r'^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$'
-    is_ip_address = 1.0 if re.match(ip_pattern, host_lower) else 0.0
+    is_ip_address = 1.0 if RE_IP.match(host_lower) else 0.0
 
     # 21. Punycode Detection (IDN homoglyph spoofing)
     is_punycode = 1.0 if 'xn--' in host_lower else 0.0
@@ -164,19 +171,33 @@ def extract_features(raw_url: str) -> Tuple[Dict[str, float], Dict[str, Any]]:
             tld_risk_score = weight
             break
 
-    # 24. Minimum Levenshtein Distance to Top Trusted Brands
-    host_tokens = re.split(r'[-._0-9]', host_lower)
-    host_tokens = [t for t in host_tokens if len(t) >= 3]
+    # 24. Minimum Levenshtein Distance to Top Trusted Brands (Optimized)
+    host_tokens = [t for t in RE_HOST_TOKENS.split(host_lower) if len(t) >= 3]
     
     min_brand_dist = 99
     matched_target_brand = "None"
     
-    for brand in TOP_BRANDS:
-        for token in host_tokens:
-            dist = levenshtein_distance(token, brand)
-            if dist < min_brand_dist:
-                min_brand_dist = dist
-                matched_target_brand = brand
+    # Fast exact match check O(1)
+    token_set = set(host_tokens)
+    exact_matches = token_set.intersection(TOP_BRANDS_SET)
+    if exact_matches:
+        min_brand_dist = 0
+        matched_target_brand = next(iter(exact_matches))
+    else:
+        for brand in TOP_BRANDS:
+            b_len = len(brand)
+            for token in host_tokens:
+                t_len = len(token)
+                if abs(t_len - b_len) >= min_brand_dist or abs(t_len - b_len) > 2:
+                    continue
+                dist = levenshtein_distance(token, brand)
+                if dist < min_brand_dist:
+                    min_brand_dist = dist
+                    matched_target_brand = brand
+                    if min_brand_dist <= 1:
+                        break
+            if min_brand_dist == 0:
+                break
 
     is_homoglyph_brand = 1.0 if min_brand_dist in [1, 2] else 0.0
 
@@ -207,7 +228,7 @@ def extract_features(raw_url: str) -> Tuple[Dict[str, float], Dict[str, Any]]:
     consecutive_char_repeat_count = float(max_repeat)
 
     # 28. Average Word Length in URL
-    words = re.findall(r'[a-zA-Z]+', url)
+    words = RE_WORDS.findall(url)
     avg_word_length = round(sum(len(w) for w in words) / len(words), 4) if words else 0.0
 
     # 29. Character Trigram Diversity Ratio
@@ -274,7 +295,6 @@ FEATURE_NAMES = [
 ]
 
 
-
 def _extract_chunk(chunk: List[str]) -> List[List[float]]:
     """Helper worker to extract feature vectors for a list of URLs."""
     results = []
@@ -284,19 +304,31 @@ def _extract_chunk(chunk: List[str]) -> List[List[float]]:
     return results
 
 
-def extract_features_batch(urls: List[str], chunk_size: int = 2000, n_jobs: int = -1) -> np.ndarray:
+def extract_features_batch(urls: List[str], chunk_size: int = 5000, n_jobs: int = -1) -> np.ndarray:
     """
     High-speed parallel batch feature extraction across all available CPU cores.
     Returns a numpy float32 feature matrix of shape (len(urls), len(FEATURE_NAMES)).
     """
     from joblib import Parallel, delayed
+    try:
+        from tqdm import tqdm
+        has_tqdm = True
+    except ImportError:
+        has_tqdm = False
+
     if not urls:
         return np.empty((0, len(FEATURE_NAMES)), dtype=np.float32)
 
     chunks = [urls[i:i + chunk_size] for i in range(0, len(urls), chunk_size)]
-    parallel_results = Parallel(n_jobs=n_jobs, batch_size=1)(
-        delayed(_extract_chunk)(c) for c in chunks
-    )
+    
+    if has_tqdm:
+        parallel_results = Parallel(n_jobs=n_jobs, batch_size=1)(
+            delayed(_extract_chunk)(c) for c in tqdm(chunks, desc="  Extracting Domain Features", unit="chunk")
+        )
+    else:
+        parallel_results = Parallel(n_jobs=n_jobs, batch_size=1)(
+            delayed(_extract_chunk)(c) for c in chunks
+        )
+        
     flat_results = [vec for sublist in parallel_results for vec in sublist]
     return np.array(flat_results, dtype=np.float32)
-
