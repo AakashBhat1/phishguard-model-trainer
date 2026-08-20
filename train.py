@@ -352,14 +352,14 @@ class PyTorchPhishNetClassifier:
 # LightGBM GPU / CPU Fallback Trainer
 # ---------------------------------------------------------------------------
 def train_lightgbm_smart(params: Dict[str, Any], X_train, y_train, model_name: str = "LightGBM") -> Any:
-    """Attempts training with GPU acceleration if available, falling back cleanly to CPU mode."""
+    """Attempts training with GPU acceleration (CUDA or OpenCL) if available, falling back cleanly to CPU mode."""
     if not HAS_LIGHTGBM:
         print(f"    ! LightGBM not installed, using HistGradientBoostingClassifier fallback for {model_name}...")
         hgb = HistGradientBoostingClassifier(max_iter=params.get('n_estimators', 300), random_state=42)
         hgb.fit(X_train.toarray() if sp.issparse(X_train) else X_train, y_train)
         return hgb
 
-    # Attempt GPU acceleration
+    # 1. Attempt GPU acceleration with CUDA backend
     if USE_CUDA:
         try:
             gpu_params = params.copy()
@@ -373,10 +373,26 @@ def train_lightgbm_smart(params: Dict[str, Any], X_train, y_train, model_name: s
             model.fit(X_train, y_train)
             print(f"    -> {model_name} trained successfully on GPU (CUDA Acceleration)!")
             return model
+        except Exception:
+            pass
+
+        # 2. Attempt GPU acceleration with OpenCL backend
+        try:
+            opencl_params = params.copy()
+            opencl_params.update({
+                'device_type': 'gpu',
+                'gpu_platform_id': 0,
+                'gpu_device_id': 0,
+                'verbose': -1
+            })
+            model = lgb.LGBMClassifier(**opencl_params)
+            model.fit(X_train, y_train)
+            print(f"    -> {model_name} trained successfully on GPU (OpenCL Acceleration)!")
+            return model
         except Exception as e:
             print(f"    ! LightGBM GPU mode unavailable ({e}). Gracefully executing with multi-threaded CPU...")
 
-    # CPU Multi-thread fallback
+    # 3. CPU Multi-thread fallback
     cpu_params = params.copy()
     cpu_params.update({
         'n_jobs': -1,
@@ -520,9 +536,10 @@ def run_full_training():
     print(f"\n  [4/4] Training Unified Hybrid LightGBM Classifier ({X_train_hybrid.shape[1]:,} Features)...")
     t0 = time.time()
     hybrid_params = {
-        'n_estimators': 450,
-        'learning_rate': 0.06,
+        'n_estimators': 350,
+        'learning_rate': 0.08,
         'num_leaves': 63,
+        'max_bin': 63,
         'subsample': 0.85,
         'colsample_bytree': 0.80,
         'random_state': 42
