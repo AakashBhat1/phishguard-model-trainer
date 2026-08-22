@@ -62,6 +62,78 @@ RE_IP = re.compile(r'^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5
 RE_HOST_TOKENS = re.compile(r'[-._0-9]+')
 RE_WORDS = re.compile(r'[a-zA-Z]+')
 
+# ---------------------------------------------------------------------------
+# URL Normalisation — the train/serve contract
+# ---------------------------------------------------------------------------
+# The two source corpora disagree on surface form: 43.6% of malicious URLs carry an
+# explicit http(s):// scheme against only 9.3% of benign ones, and 0.00% of benign
+# rows are bare domains against 7.69% of malicious ones. A char_wb TF-IDF fitted on
+# the raw strings therefore learns "has a scheme => phishing" rather than anything
+# about the URL. Measured on the shipped hybrid model: adding "https://" to an
+# otherwise untouched benign URL moves p from 0.443 to 0.993 on average.
+#
+# normalize_url() must be applied identically at training time and at inference time.
+# Changing it invalidates every serialized artifact, so bump NORMALIZATION_VERSION and
+# retrain when you do.
+RE_SCHEME = re.compile(r'^[a-z][a-z0-9+.\-]*://')
+RE_WWW = re.compile(r'^www\d*\.')
+
+NORMALIZATION_VERSION = 'v1-strip-scheme-www-lower'
+
+# Second-level labels that are really public suffixes (co.uk, com.au, co.in, ...).
+# Keeps "bbc.co.uk" from collapsing to the useless group key "co.uk".
+MULTI_PART_SLDS = {'co', 'com', 'net', 'org', 'gov', 'edu', 'ac', 'or', 'ne', 'go'}
+
+# TLD labels excluded from brand-similarity scoring. See the note at feature 24.
+COMMON_TLDS = {
+    'com', 'org', 'net', 'edu', 'gov', 'mil', 'int', 'io', 'co', 'ai', 'app', 'dev',
+    'uk', 'ca', 'de', 'jp', 'fr', 'au', 'in', 'ru', 'cn', 'cc', 'xyz', 'top', 'tk',
+    'ml', 'ga', 'cf', 'gq', 'click', 'club', 'work', 'link', 'buzz', 'fit', 'info',
+    'cam', 'icu', 'monster', 'live', 'online', 'site', 'us', 'me', 'tv', 'biz', 'pro'
+}
+
+
+def normalize_url(raw_url: str) -> str:
+    """
+    Canonical surface form of a URL: lowercased, scheme removed, leading 'www.'
+    removed, trailing slashes removed.
+
+        'https://WWW.Example.com/Login/'  ->  'example.com/login'
+        'example.com'                     ->  'example.com'
+
+    Falls back to the lowercased original if normalisation would empty the string.
+    """
+    original = str(raw_url).strip().lower()
+    url = RE_SCHEME.sub('', original)
+    url = RE_WWW.sub('', url)
+    url = url.rstrip('/')
+    return url or original
+
+
+def registered_domain(raw_url: str) -> str:
+    """
+    Approximate eTLD+1 for a URL, used as the grouping key when splitting the dataset.
+
+    The corpus holds 707,517 URLs across only 228,548 hosts (3.1 URLs per host), so a
+    random row split puts the same host in both train and test and inflates every
+    reported metric. Grouping on this key is what makes the held-out score mean
+    something.
+
+    Heuristic, not a Public Suffix List lookup; install `tldextract` and swap it in if
+    you need exactness.
+    """
+    host = normalize_url(raw_url).split('/')[0].split('?')[0].split('#')[0]
+    host = host.split('@')[-1]   # drop any userinfo@ prefix
+    host = host.split(':')[0]    # drop the port
+    if RE_IP.match(host):
+        return host
+    parts = [p for p in host.split('.') if p]
+    if len(parts) <= 2:
+        return host
+    if parts[-2] in MULTI_PART_SLDS:
+        return '.'.join(parts[-3:])
+    return '.'.join(parts[-2:])
+
 
 def calculate_shannon_entropy(text: str) -> float:
     """Calculate Shannon Entropy (randomness / information density) of a string."""
@@ -172,8 +244,16 @@ def extract_features(raw_url: str) -> Tuple[Dict[str, float], Dict[str, Any]]:
             break
 
     # 24. Minimum Levenshtein Distance to Top Trusted Brands (Optimized)
-    host_tokens = [t for t in RE_HOST_TOKENS.split(host_lower) if len(t) >= 3]
-    
+    # Public-suffix labels must be dropped before the brand comparison. Left in, the
+    # token "com" sits at edit distance 2 from "zoom", so EVERY .com host scored
+    # min_brand_levenshtein_distance = 2 and is_homoglyph_brand = 1.0. ".app" (2 from
+    # "apple") and ".dev" (2 from "dhl") collide the same way. ml_service/features.py
+    # already filtered these, so the two copies disagreed on 2 of the 30 features and
+    # the model was served inputs it was never trained on.
+    host_tokens = [t for t in RE_HOST_TOKENS.split(host_lower)
+                   if len(t) >= 3 and t not in COMMON_TLDS]
+
+
     min_brand_dist = 99
     matched_target_brand = "None"
     
