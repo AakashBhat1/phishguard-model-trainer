@@ -91,14 +91,11 @@ phishguard_training_pack/
 ### Method B: Terminal / Single Code Cell in Colab
 In a Colab cell, execute:
 ```bash
-# 1. Configure OpenCL / GPU acceleration drivers for Tesla T4 GPU
-!apt-get install -y -qq ocl-icd-libopencl1 opencl-headers clinfo libboost-all-dev > /dev/null 2>&1
-!mkdir -p /etc/OpenCL/vendors && echo "libnvidia-opencl.so.1" > /etc/OpenCL/vendors/nvidia.icd 2>/dev/null || true
+# 1. Install pyarrow and build LightGBM with native CUDA GPU support (~60s):
+!pip install pyarrow -q
+!pip install lightgbm --no-binary lightgbm --config-settings=cmake.define.USE_CUDA=ON -q
 
-# 2. Install dependencies
-!pip install torch torchvision lightgbm scikit-learn pandas numpy scipy joblib tqdm matplotlib seaborn -q
-
-# 3. Run full training with T4 GPU acceleration
+# 2. Run full training with T4 GPU acceleration (PhishNet Tensor Cores + LightGBM CUDA)
 !python train.py
 ```
 
