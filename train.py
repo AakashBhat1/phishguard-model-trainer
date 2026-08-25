@@ -95,10 +95,98 @@ def print_banner():
 # ---------------------------------------------------------------------------
 # Dataset Ingestion & Preprocessing
 # ---------------------------------------------------------------------------
+MASTER_PARQUET = os.path.join(BASE_DIR, 'phishguard_master_dataset.parquet')
+MASTER_CSV = os.path.join(BASE_DIR, 'phishguard_master_dataset.csv')
+MASTER_MANIFEST = os.path.join(BASE_DIR, 'master_dataset_manifest.json')
+
+
+def load_master_dataset(max_samples: Optional[int] = 0) -> Optional[pd.DataFrame]:
+    """
+    Load the consolidated master dataset if consolidate_datasets.py has produced one.
+
+    The master file is already normalised, cross-corpus deduplicated, consensus-labelled
+    and group-tagged, so this path skips straight to sampling. Parquet is preferred: it
+    is ~45 MB against ~80 MB and loads in a fraction of the time, which matters on a
+    Colab runtime that re-uploads the file every session.
+
+    Returns None when no master file exists, so the caller falls back to the raw CSVs.
+    """
+    path = MASTER_PARQUET if os.path.exists(MASTER_PARQUET) else (
+        MASTER_CSV if os.path.exists(MASTER_CSV) else None)
+    if path is None:
+        return None
+
+    print(f"  • Master dataset found: {os.path.basename(path)}")
+    try:
+        if path.endswith('.parquet'):
+            df = pd.read_parquet(path, columns=['url', 'label', 'group'])
+        else:
+            df = pd.read_csv(path, usecols=['url', 'label', 'group'], low_memory=False)
+    except ImportError as e:
+        # Parquet present but no engine installed on this runtime.
+        if not os.path.exists(MASTER_CSV):
+            print(f"  ! Cannot read {os.path.basename(path)} ({e}) and no CSV fallback exists.")
+            return None
+        print(f"  ! Parquet engine missing ({e}); falling back to the CSV copy.")
+        df = pd.read_csv(MASTER_CSV, usecols=['url', 'label', 'group'], low_memory=False)
+
+    df = df.dropna(subset=['url', 'label', 'group'])
+    df['label'] = df['label'].astype(int)
+
+    # The master file records which normalisation and which conflict rule built it.
+    # Training against a master built by a different features.py is the same silent
+    # skew that the serving manifest check guards against, so refuse to be quiet here.
+    if os.path.exists(MASTER_MANIFEST):
+        try:
+            with open(MASTER_MANIFEST, 'r', encoding='utf-8') as f:
+                mm = json.load(f)
+            built_with = mm.get('url_normalization')
+            if built_with and built_with != NORMALIZATION_VERSION:
+                print(f"  ! WARNING: master dataset was built with normalisation '{built_with}' "
+                      f"but features.py implements '{NORMALIZATION_VERSION}'. "
+                      f"Re-run consolidate_datasets.py before trusting this run.")
+            audit = mm.get('surface_form_audit', {}).get('master', {})
+            if audit:
+                print(f"    -> surface-form path-rule accuracy: {audit.get('path_rule_accuracy')} "
+                      f"(0.50 = no formatting shortcut)")
+            conflicts = mm.get('totals', {}).get('label_conflicts')
+            if conflicts:
+                print(f"    -> {conflicts:,} cross-corpus label conflicts, policy: "
+                      f"{mm.get('conflict_policy')}")
+        except Exception as e:
+            print(f"  ! Could not read master manifest: {e}")
+
+    benign_cnt = int((df['label'] == 0).sum())
+    phish_cnt = int((df['label'] == 1).sum())
+    print(f"  • Loaded {len(df):,} pre-cleaned URLs "
+          f"(Benign: {benign_cnt:,} | Malicious: {phish_cnt:,}) across "
+          f"{df['group'].nunique():,} registered domains")
+
+    if max_samples and max_samples > 0 and len(df) > max_samples:
+        print(f"  • Downsampling to {max_samples:,} records for quick test...")
+        df = (df.groupby('label', group_keys=False, sort=False)
+              .sample(frac=max_samples / len(df), random_state=42)
+              .sample(frac=1.0, random_state=42)
+              .reset_index(drop=True))
+    else:
+        print(f"  • Training on FULL 100% MASTER DATASET ({len(df):,} samples)!")
+
+    return df.reset_index(drop=True)
+
+
 def load_and_harmonize_datasets(csv1_path: str, csv2_path: str, max_samples: Optional[int] = 0) -> pd.DataFrame:
     print("=" * 100)
-    print(" [1/6] INGESTING & HARMONIZING 1,200,000+ SAMPLES DATASET")
+    print(" [1/6] INGESTING & HARMONIZING DATASET")
     print("=" * 100)
+
+    # Prefer the consolidated master dataset; fall back to harmonising the raw CSVs so
+    # the trainer still runs on a checkout where consolidate_datasets.py was never run.
+    master = load_master_dataset(max_samples=max_samples)
+    if master is not None:
+        return master
+    print("  • No master dataset present — harmonising raw CSVs "
+          "(run consolidate_datasets.py to skip this step).")
+
     dfs = []
 
     if os.path.exists(csv1_path):
@@ -266,7 +354,7 @@ def train_lightgbm_smart(params: Dict[str, Any], X_train, y_train, model_name: s
 # ---------------------------------------------------------------------------
 # Main Full Pipeline Execution
 # ---------------------------------------------------------------------------
-def run_full_training():
+def run_full_training(max_samples: int = 0):
     start_time = time.time()
     print_banner()
 
@@ -274,7 +362,7 @@ def run_full_training():
     csv2 = os.path.join(BASE_DIR, 'phishing_site_urls.csv')
 
     # 1. Ingest Data
-    df = load_and_harmonize_datasets(csv1, csv2, max_samples=0)
+    df = load_and_harmonize_datasets(csv1, csv2, max_samples=max_samples)
 
     # 2. 3-Way Partitioning grouped by registered domain (70% / 15% / 15%)
     print("\n" + "=" * 100)
@@ -708,4 +796,18 @@ def run_full_training():
 
 
 if __name__ == '__main__':
-    run_full_training()
+    import argparse
+
+    ap = argparse.ArgumentParser(
+        description="PhishGuard 2.0 training pipeline (master dataset aware).")
+    ap.add_argument('--quick-test', action='store_true',
+                    help="End-to-end smoke run on 5,000 samples. Verifies ingestion, feature "
+                         "extraction and model fitting; the resulting metrics are meaningless.")
+    ap.add_argument('--max-samples', type=int, default=0,
+                    help="Cap the training rows (0 = full dataset).")
+    args = ap.parse_args()
+
+    n = 5000 if args.quick_test else args.max_samples
+    if args.quick_test:
+        print("\n*** QUICK TEST MODE: 5,000 samples. Metrics from this run are NOT valid. ***\n")
+    run_full_training(max_samples=n)

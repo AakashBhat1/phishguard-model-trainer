@@ -1,0 +1,128 @@
+{
+  "created_at": "2026-08-25 15:47:49",
+  "url_normalization": "v1-strip-scheme-www-lower",
+  "phiusiil_benign_policy": "include",
+  "conflict_policy": "phishing",
+  "schema": {
+    "url": "normalised URL string (scheme, leading www. and trailing / removed)",
+    "label": "1 = phishing / malicious, 0 = benign",
+    "group": "approximate eTLD+1, the GroupShuffleSplit key that prevents host leakage",
+    "source_dataset": "originating corpora, '+'-joined when a URL appears in several"
+  },
+  "totals": {
+    "unique_urls": 925045,
+    "benign": 513383,
+    "phishing": 411662,
+    "benign_pct": 0.555,
+    "phishing_pct": 0.445,
+    "unique_registered_domains": 350009,
+    "urls_per_domain": 2.643,
+    "cross_corpus_duplicates": 439907,
+    "label_conflicts": 90869,
+    "label_conflict_handling": "phishing",
+    "rows_dropped_no_host": 2
+  },
+  "per_source": {
+    "malicious_phish": {
+      "unique_urls": 632903,
+      "benign": 422509,
+      "phishing": 210394,
+      "surface_form": {
+        "n_rows": 632903,
+        "pct_with_path": 0.886923,
+        "pct_with_path_benign": 0.888012,
+        "pct_with_path_phishing": 0.884735,
+        "p_phishing_given_path": 0.331607,
+        "p_phishing_given_bare": 0.338857,
+        "path_rule_accuracy": 0.36887
+      }
+    },
+    "phishing_site_urls": {
+      "unique_urls": 501436,
+      "benign": 392864,
+      "phishing": 108572,
+      "surface_form": {
+        "n_rows": 501436,
+        "pct_with_path": 0.894754,
+        "pct_with_path_benign": 0.888076,
+        "pct_with_path_phishing": 0.91892,
+        "p_phishing_given_path": 0.22237,
+        "p_phishing_given_bare": 0.166806,
+        "path_rule_accuracy": 0.286657
+      }
+    },
+    "phiusiil": {
+      "unique_urls": 231789,
+      "benign": 134807,
+      "phishing": 96982,
+      "surface_form": {
+        "n_rows": 231789,
+        "pct_with_path": 0.11812,
+        "pct_with_path_benign": 0.0,
+        "pct_with_path_phishing": 0.28231,
+        "p_phishing_given_path": 1.0,
+        "p_phishing_given_bare": 0.340507,
+        "path_rule_accuracy": 0.699714
+      }
+    }
+  },
+  "source_dataset_counts": {
+    "malicious_phish+phishing_site_urls": 438540,
+    "phiusiil": 230423,
+    "malicious_phish": 193109,
+    "phishing_site_urls": 61607,
+    "malicious_phish+phishing_site_urls+phiusiil": 1174,
+    "phishing_site_urls+phiusiil": 113,
+    "malicious_phish+phiusiil": 79
+  },
+  "surface_form_audit": {
+    "note": "path_rule_accuracy is the accuracy of predicting \"phishing iff the normalised URL contains a path\". 0.5 means no shortcut; values near 1.0 mean the corpus is separable on formatting alone.",
+    "master": {
+      "n_rows": 925045,
+      "pct_with_path": 0.697516,
+      "pct_with_path_benign": 0.654184,
+      "pct_with_path_phishing": 0.751556,
+      "p_phishing_given_path": 0.479496,
+      "p_phishing_given_bare": 0.365515,
+      "path_rule_accuracy": 0.526378
+    },
+    "per_source": {
+      "malicious_phish": {
+        "n_rows": 632903,
+        "pct_with_path": 0.886923,
+        "pct_with_path_benign": 0.888012,
+        "pct_with_path_phishing": 0.884735,
+        "p_phishing_given_path": 0.331607,
+        "p_phishing_given_bare": 0.338857,
+        "path_rule_accuracy": 0.36887
+      },
+      "phishing_site_urls": {
+        "n_rows": 501436,
+        "pct_with_path": 0.894754,
+        "pct_with_path_benign": 0.888076,
+        "pct_with_path_phishing": 0.91892,
+        "p_phishing_given_path": 0.22237,
+        "p_phishing_given_bare": 0.166806,
+        "path_rule_accuracy": 0.286657
+      },
+      "phiusiil": {
+        "n_rows": 231789,
+        "pct_with_path": 0.11812,
+        "pct_with_path_benign": 0.0,
+        "pct_with_path_phishing": 0.28231,
+        "p_phishing_given_path": 1.0,
+        "p_phishing_given_bare": 0.340507,
+        "path_rule_accuracy": 0.699714
+      }
+    }
+  },
+  "build_seconds": 14.54,
+  "outputs": {
+    "phishguard_master_dataset.csv": {
+      "size_mb": 80.36
+    },
+    "phishguard_master_dataset.parquet": {
+      "size_mb": 45.59
+    }
+  }
+}
