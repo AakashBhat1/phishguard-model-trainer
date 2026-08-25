@@ -62,7 +62,7 @@ Thumbs.db
 # prefers the Parquet anyway (load_master_dataset falls back to CSV only when no
 # Parquet engine is installed).
 phishguard_master_dataset.csv
-!phishguard_master_dataset.parquet
+
 
 # master_dataset_manifest.json is intentionally tracked — it records which
 # normalisation, PhiUSIIL policy and conflict policy produced the committed Parquet.
